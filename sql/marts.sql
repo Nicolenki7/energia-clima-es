@@ -85,7 +85,7 @@ SELECT
 FROM base
 GROUP BY ciudad, ts_local::DATE;
 
--- Hora del día: en té franja conviene consumir, por zona y serie.
+-- Hora del día: en qué franja conviene consumir, por zona y serie.
 CREATE OR REPLACE VIEW mart_hora_del_dia AS
 WITH base AS (
     SELECT
@@ -99,5 +99,5 @@ SELECT
     extract(hour FROM ts_local)   AS hora_local,
     round(avg(precio_eur_mwh), 2) AS precio_medio_eur_mwh,
     count(*)                      AS observaciones
-        FROM base
+FROM base
 GROUP BY zona, extract(hour FROM ts_local);

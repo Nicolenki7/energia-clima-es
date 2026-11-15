@@ -21,7 +21,7 @@ from src.load import cargar
 from src.sources.openmeteo import fetch_clima
 from src.sources.ree import fetch_pvpc
 
-DB_PORT_DEFECTO = "data/energia.duckdb"
+DB_POR_DEFECTO = "data/energia.duckdb"
 TZ_LOCAL = ZoneInfo("Europe/Madrid")
 
 
@@ -70,14 +70,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--chunk-days", type=int, default=7, help="días por pedido a las fuentes"
     )
-    parser.add_argument("--db", default=DB_PORT_DEFAULT, help="ruta del DuckDB")
+    parser.add_argument("--db", default=DB_POR_DEFECTO, help="ruta del DuckDB")
     args = parser.parse_args(argv)
 
     inicio, fin = resolver_ventana(args.start, args.end, args.days)
     print(f"ventana: {inicio:%Y-%m-%d} -> {fin - timedelta(days=1):%Y-%m-%d}")
 
-    bloques = list(tramos(inicio, fin, max(1, args.chund_days)))
-    print(f"tramos: {len(bloques) i de {args.chunk_days} días")
+    bloques = list(tramos(inicio, fin, max(1, args.chunk_days)))
+    print(f"tramos: {len(bloques)} de {args.chunk_days} días")
 
     precios, climas = [], []
     for n, (desde, hasta) in enumerate(bloques, start=1):

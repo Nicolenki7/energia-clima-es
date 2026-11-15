@@ -9,14 +9,18 @@ on:
         description: "Ventana hacia atrás en días"
         required: false
         default: "7"
+      chunk_days:
+        description: "Días por pedido a las fuentes"
+        required: false
+        default: "7"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   ingesta:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -29,15 +33,17 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Ingesta
-        run: python -m src.pipeline --days ${{ inputs.days || 7 }}
+        run: |
+          python -m src.pipeline \
+            --days ${{ inputs.days || 7 }} \
+            --chunk-days ${{ inputs.chunk_days || 7 }}
 
       - name: Resumen del dato
         run: |
           python - <<'PY'
           import duckdb, pathlib
-          db = pathlib.Path("data/energia.duckdb")
-          con = duckdb.connect(str(db), read_only=True)
-          for vista in ("mart_hora_energia", "mart_dia_zona"):
+          con = duckdb.connect("data/energia.duckdb", read_only=True)
+          for vista in ("mart_hora_energia", "mart_dia_zona", "mart_dia_ciudad", "mart_hora_del_dia"):
               filas = con.execute(f"SELECT count(*) FROM {vista}").fetchone()[0]
               print(f"{vista}: {filas} filas")
           rango = con.execute(
@@ -53,12 +59,29 @@ jobs:
           import duckdb, pathlib
           pathlib.Path("data/out").mkdir(parents=True, exist_ok=True)
           con = duckdb.connect("data/energia.duckdb", read_only=True)
-          for vista in ("mart_hora_energia", "mart_dia_zona", "mart_hora_del_dia"):
+          for vista in ("mart_hora_energia", "mart_dia_zona", "mart_dia_ciudad", "mart_hora_del_dia"):
               con.execute(
                   f"COPY (SELECT * FROM {vista}) TO 'data/out/{vista}.csv' (HEADER, DELIMITER ',')"
               )
           con.close()
           PY
+
+      - name: Publicar marts en la rama data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          git init -q publicar
+          cd publicar
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          cp "$GITHUB_WORKSPACE"/data/out/*.csv .
+          date -u +%Y-%m-%dT%H:%M:%SZ > ACTUALIZADO.txt
+          git add .
+          git commit -q -m "data: marts al $(date -u +%Y-%m-%d)"
+          git push -q --force origin HEAD:data
 
       - uses: actions/upload-artifact@v4
         with:

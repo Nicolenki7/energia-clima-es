@@ -1,0 +1,69 @@
+name: ingesta
+
+on:
+  schedule:
+    - cron: "15 6 * * *"   # 06:15 UTC, todos los días
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Ventana hacia atrás en días"
+        required: false
+        default: "7"
+
+permissions:
+  contents: read
+
+jobs:
+  ingesta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ingesta
+        run: python -m src.pipeline --days ${{ inputs.days || 7 }}
+
+      - name: Resumen del dato
+        run: |
+          python - <<'PY'
+          import duckdb, pathlib
+          db = pathlib.Path("data/energia.duckdb")
+          con = duckdb.connect(str(db), read_only=True)
+          for vista in ("mart_hora_energia", "mart_dia_zona"):
+              filas = con.execute(f"SELECT count(*) FROM {vista}").fetchone()[0]
+              print(f"{vista}: {filas} filas")
+          rango = con.execute(
+              "SELECT min(ts_utc), max(ts_utc) FROM stg_pvpc"
+          ).fetchone()
+          print(f"rango de la serie: {rango[0]} -> {rango[1]}")
+          con.close()
+          PY
+
+      - name: Exportar marts a CSV
+        run: |
+          python - <<'PY'
+          import duckdb, pathlib
+          pathlib.Path("data/out").mkdir(parents=True, exist_ok=True)
+          con = duckdb.connect("data/energia.duckdb", read_only=True)
+          for vista in ("mart_hora_energia", "mart_dia_zona", "mart_hora_del_dia"):
+              con.execute(
+                  f"COPY (SELECT * FROM {vista}) TO 'data/out/{vista}.csv' (HEADER, DELIMITER ',')"
+              )
+          con.close()
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marts-${{ github.run_id }}
+          path: |
+            data/energia.duckdb
+            data/out/*.csv
+          retention-days: 30

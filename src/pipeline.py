@@ -15,11 +15,13 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from src.load import cargar
 from src.sources.openmeteo import fetch_clima
 from src.sources.ree import fetch_pvpc
 
-DB_POR_DEFECTO = "data/energia.duckdb"
+DB_PORT_DEFECTO = "data/energia.duckdb"
 TZ_LOCAL = ZoneInfo("Europe/Madrid")
 
 
@@ -47,24 +49,46 @@ def resolver_ventana(
     return inicio, fin
 
 
+def tramos(inicio: datetime, fin: datetime, dias: int):
+    """Parte la ventana en bloques de N días.
+
+    REE no acepta rangos largos de una sola vez (devuelve 503), así que el backfill
+    histórico se pide por tramos y se carga una sola vez al final.
+    """
+    actual = inicio
+    while actual < fin:
+        siguiente = min(actual + timedelta(days=dias), fin)
+        yield actual, siguiente
+        actual = siguiente
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", help="fecha inicial YYYY-MM-DD (hora local)")
     parser.add_argument("--end", help="fecha final YYYY-MM-DD, inclusive")
     parser.add_argument("--days", type=int, default=7, help="ventana hacia atrás")
-    parser.add_argument("--db", default=DB_POR_DEFECTO, help="ruta del DuckDB")
+    parser.add_argument(
+        "--chunk-days", type=int, default=7, help="días por pedido a las fuentes"
+    )
+    parser.add_argument("--db", default=DB_PORT_DEFAULT, help="ruta del DuckDB")
     args = parser.parse_args(argv)
 
     inicio, fin = resolver_ventana(args.start, args.end, args.days)
     print(f"ventana: {inicio:%Y-%m-%d} -> {fin - timedelta(days=1):%Y-%m-%d}")
 
-    print("extrayendo PVPC (REE)...")
-    precio = fetch_pvpc(inicio, fin - timedelta(minutes=1))
-    print(f"  {len(precio)} filas, zonas: {sorted(precio['zona'].unique())}")
+    bloques = list(tramos(inicio, fin, max(1, args.chund_days)))
+    print(f"tramos: {len(bloques) i de {args.chunk_days} días")
 
-    print("extrayendo clima (Open-Meteo)...")
-    clima = fetch_clima(inicio, fin - timedelta(minutes=1))
-    print(f"  {len(clima)} filas, ciudades: {sorted(clima['ciudad'].unique())}")
+    precios, climas = [], []
+    for n, (desde, hasta) in enumerate(bloques, start=1):
+        print(f"  [{n}/{len(bloques)}] {desde:%Y-%m-%d} -> {hasta - timedelta(days=1):%Y-%m-%d}")
+        precios.append(fetch_pvpc(desde, hasta - timedelta(minutes=1)))
+        climas.append(fetch_clima(desde, hasta - timedelta(minutes=1)))
+
+    precio = pd.concat(precios, ignore_index=True)
+    clima = pd.concat(climas, ignore_index=True)
+    print(f"precio: {len(precio)} filas, zonas: {sorted(precio['zona'].unique())}")
+    print(f"clima: {len(clima)} filas, ciudades: {sorted(clima['ciudad'].unique())}")
 
     resumen = cargar(
         db_path=Path(args.db),

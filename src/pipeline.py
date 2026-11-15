@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from src.http import ErrorDeFuente
 from src.load import cargar
 from src.sources.openmeteo import fetch_clima
 from src.sources.ree import fetch_pvpc
@@ -62,6 +63,30 @@ def tramos(inicio: datetime, fin: datetime, dias: int):
         actual = siguiente
 
 
+def extraer(fn, desde: datetime, hasta: datetime, fallos: list[str], etiqueta: str):
+    """Pide un tramo [desde, hasta) y, si la fuente lo rechaza, lo parte a la mitad.
+
+    REE contesta 400 "datos no disponibles" cuando el rango es largo, aunque los
+    mismos días pedidos de a poco sí están. Así que un tramo rechazado se reintenta
+    partido, en vez de tumbar la corrida entera. Si un solo día falla de verdad, se
+    anota el hueco y se sigue: el faltante se informa, no se rellena.
+    """
+    try:
+        return fn(desde, hasta - timedelta(minutes=1))
+    except ErrorDeFuente as exc:
+        dias = (hasta.date() - desde.date()).days
+        if dias <= 1:
+            fallos.append(f"{etiqueta} {desde:%Y-%m-%d}: {str(exc)[:140]}")
+            return None
+        corte = desde + timedelta(days=dias // 2)
+        partes = [
+            extraer(fn, desde, corte, fallos, etiqueta),
+            extraer(fn, corte, hasta, fallos, etiqueta),
+        ]
+        partes = [p for p in partes if p is not None and len(p)]
+        return pd.concat(partes, ignore_index=True) if partes else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", help="fecha inicial YYYY-MM-DD (hora local)")
@@ -79,11 +104,26 @@ def main(argv: list[str] | None = None) -> int:
     bloques = list(tramos(inicio, fin, max(1, args.chunk_days)))
     print(f"tramos: {len(bloques)} de {args.chunk_days} días")
 
-    precios, climas = [], []
+    precios, climas, fallos = [], [], []
     for n, (desde, hasta) in enumerate(bloques, start=1):
         print(f"  [{n}/{len(bloques)}] {desde:%Y-%m-%d} -> {hasta - timedelta(days=1):%Y-%m-%d}")
-        precios.append(fetch_pvpc(desde, hasta - timedelta(minutes=1)))
-        climas.append(fetch_clima(desde, hasta - timedelta(minutes=1)))
+        for destino, fn, etiqueta in (
+            (precios, fetch_pvpc, "precio"),
+            (climas, fetch_clima, "clima"),
+        ):
+            parte = extraer(fn, desde, hasta, fallos, etiqueta)
+            if parte is not None and len(parte):
+                destino.append(parte)
+
+    if fallos:
+        print(f"atención: {len(fallos)} día(s) sin datos en la fuente")
+        for f in fallos[:15]:
+            print(f"  {f}")
+        if len(fallos) > 15:
+            print(f"  ... y {len(fallos) - 15} más")
+
+    if not precios or not climas:
+        raise SystemExit("no se pudo extraer nada: revisar conectividad o las fuentes")
 
     precio = pd.concat(precios, ignore_index=True)
     clima = pd.concat(climas, ignore_index=True)

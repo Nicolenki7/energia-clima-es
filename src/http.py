@@ -33,6 +33,15 @@ def get_json(
             respuesta = requests.get(url, params=params, timeout=timeout)
             if respuesta.status_code in REINTENTABLES:
                 raise requests.HTTPError(f"HTTP {respuesta.status_code}")
+            if 400 <= respuesta.status_code < 500:
+                # Un 4xx no es transitorio: reintentarlo solo suma 30 segundos de espera.
+                # Se levanta de una y el que llama decide qué hacer; el pipeline, por
+                # ejemplo, parte el tramo a la mitad porque REE contesta 400 cuando el
+                # rango es grande.
+                raise ErrorDeFuente(
+                    f"{url} rechazó la petición ({respuesta.status_code}): "
+                    f"{respuesta.text[:160]}"
+                )
             respuesta.raise_for_status()
             return respuesta.json()
         except (requests.RequestException, ValueError) as error:
